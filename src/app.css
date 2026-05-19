@@ -1,1 +1,19 @@
 @import "tailwindcss";
+
+@font-face {
+    font-family: "SpaceMono";
+    src: url("/SpaceMono-Regular.woff2") format("woff2");
+    font-weight: normal;
+    font-style: normal;
+    font-display: block;
+}
+
+@theme {
+    --font-space-mono: SpaceMono, monospace;
+}
+
+@layer base {
+    body {
+        @apply bg-stone-950 text-stone-50 font-space-mono
+    }
+}
