@@ -9,6 +9,8 @@ import lustre/attribute
 import lustre/effect
 import lustre/element
 import lustre/element/html
+import lustre/element/keyed
+import lustre/event
 
 pub fn main() -> Nil {
   let app = lustre.application(init:, update:, view:)
@@ -28,7 +30,7 @@ type Model {
 }
 
 type Checkpoint {
-  Checkpoint(elapsed: Int)
+  Checkpoint(elapsed: Int, title: String)
 }
 
 fn init(_nil) -> #(Model, effect.Effect(Message)) {
@@ -45,6 +47,7 @@ type Message {
   TimerPauseToggled
   TimerReset
   CheckpointCaptured
+  CheckpointTitleUpdated(index: Int, title: String)
   Ticked(date: Int)
 }
 
@@ -95,11 +98,29 @@ fn update(model: Model, message: Message) -> #(Model, effect.Effect(Message)) {
 
     Timer(start_time:, current_time:, checkpoints:, ..), CheckpointCaptured -> {
       let elapsed = current_time - start_time
+      let next_id = list.length(checkpoints) + 1
 
-      Timer(..model, checkpoints: [Checkpoint(elapsed:), ..checkpoints])
+      let title =
+        "lap "
+        <> { int.to_string(next_id) |> string.pad_start(to: 2, with: "0") }
+
+      Timer(..model, checkpoints: [Checkpoint(elapsed:, title:), ..checkpoints])
       |> pair.new(effect.none())
     }
     Idle, CheckpointCaptured -> panic as "unreachable"
+
+    Timer(checkpoints:, ..), CheckpointTitleUpdated(index:, title:) -> {
+      let checkpoints =
+        list.index_map(checkpoints, with: fn(checkpoint, current) {
+          case current == index {
+            True -> Checkpoint(..checkpoint, title:)
+            False -> checkpoint
+          }
+        })
+
+      #(Timer(..model, checkpoints:), effect.none())
+    }
+    Idle, CheckpointTitleUpdated(..) -> panic as "unreachable"
 
     Timer(paused: False, ..), Ticked(date) ->
       Timer(..model, current_time: date) |> pair.new(tick())
@@ -111,7 +132,7 @@ fn view(model: Model) -> element.Element(Message) {
   html.main(
     [
       attribute.class(
-        "min-h-dvh flex flex-col font-bold items-center justify-start pt-[30vh] px-3 select-none",
+        "min-h-dvh flex flex-col font-bold items-center justify-start pt-[30vh] px-3",
       ),
     ],
     [
@@ -136,8 +157,10 @@ fn view_timer(model: Model) {
       let total_checkpoints = list.length(checkpoints)
       let checkpoints =
         list.index_map(checkpoints, fn(checkpoint, index) {
-          let index = total_checkpoints - index
-          view_checkpoint(index, checkpoint)
+          #(
+            "checkpoint@" <> int.to_string(index),
+            view_checkpoint(total_checkpoints, index, checkpoint),
+          )
         })
 
       #(
@@ -161,10 +184,11 @@ fn view_timer(model: Model) {
               icon.checkpoint("text-stone-950 size-5 mx-auto"),
             ],
           ),
-          html.ul(
+          html.hr([attribute.class("mt-2 w-full border-stone-500")]),
+          keyed.ul(
             [
               attribute.class(
-                "mt-4 max-h-48 overflow-y-auto scroll-smooth custom-scrollbar flex flex-col gap-1 pr-1",
+                "mt-2 max-h-48 overflow-y-auto scroll-smooth custom-scrollbar flex flex-col gap-1 pr-1",
               ),
             ],
             checkpoints,
@@ -175,7 +199,7 @@ fn view_timer(model: Model) {
   }
 
   [
-    html.p([attribute.class("text-3xl text-center")], [
+    html.p([attribute.class("text-3xl text-center select-none")], [
       element.text(time_to_string(parse_milliseconds(elapsed))),
     ]),
     children,
@@ -183,21 +207,50 @@ fn view_timer(model: Model) {
 }
 
 fn view_checkpoint(
+  total: Int,
   index: Int,
   checkpoint: Checkpoint,
 ) -> element.Element(Message) {
   html.li(
     [
       attribute.class(
-        "flex justify-between items-center py-2 px-1 border-b border-stone-800 text-stone-400 font-mono text-sm",
+        "flex justify-between w-full items-center py-2 px-1 border-b last:border-none gap-2 border-stone-800 text-stone-400 font-mono text-xs",
       ),
     ],
     [
-      html.span([attribute.class("text-stone-500")], [
+      html.span([attribute.class("text-stone-500 shrink-0")], [
         element.text("#"),
-        element.text(int.to_string(index) |> string.pad_start(to: 2, with: "0")),
+        element.text(
+          int.to_string(total - index) |> string.pad_start(to: 2, with: "0"),
+        ),
       ]),
-      html.span([], [
+
+      // smoll invisible mirror trick for textarea resize for all browser 
+      // engines
+      html.div([attribute.class("grid grow relative")], [
+        html.div(
+          [
+            attribute.class(
+              "col-start-1 row-start-1 w-full whitespace-pre-wrap break-all invisible text-stone-100 font-bold px-1 py-0.5 leading-relaxed min-h-[1.5em]",
+            ),
+          ],
+          [element.text(checkpoint.title <> " ")],
+        ),
+        html.textarea(
+          [
+            attribute.value(checkpoint.title),
+            attribute.rows(1),
+            attribute.maxlength(50),
+            attribute.class(
+              "col-start-1 row-start-1 h-full w-full bg-transparent break-all text-stone-100 font-bold focus:outline-none focus:bg-stone-900/50 rounded-sm text-left transition-colors resize-none overflow-hidden leading-relaxed px-1 py-0.5",
+            ),
+            event.on_input(CheckpointTitleUpdated(index, _)),
+          ],
+          checkpoint.title,
+        ),
+      ]),
+
+      html.span([attribute.class("shrink-0 text-stone-400")], [
         element.text(time_to_string(parse_milliseconds(checkpoint.elapsed))),
       ]),
     ],

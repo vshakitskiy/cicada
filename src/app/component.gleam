@@ -16,7 +16,7 @@ pub fn button(
   html.button(
     [
       attribute.class(
-        "bg-stone-50 cursor-pointer rounded-sm w-full font-bold transition-all duration-150 ease-out hover:bg-stone-200 active:bg-stone-300"
+        "bg-stone-50 cursor-pointer rounded-sm w-full font-bold transition-colors duration-150 ease-out hover:bg-stone-200 active:bg-stone-300"
         <> class,
       ),
       event.on_click(on_click),
