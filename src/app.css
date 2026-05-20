@@ -17,3 +17,30 @@
         @apply bg-stone-950 text-stone-50 font-space-mono
     }
 }
+
+@utility custom-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-stone-800) transparent;
+
+    &::-webkit-scrollbar {
+        width: 4px;
+        height: 4px;
+    }
+
+    &::-webkit-scrollbar-track {
+        background: transparent;
+    }
+
+    &::-webkit-scrollbar-thumb {
+        background-color: var(--color-stone-800);
+        border-radius: 9999px;
+    }
+
+    &::-webkit-scrollbar-thumb:hover {
+        background-color: var(--color-stone-600);
+    }
+
+    &::-webkit-scrollbar-button {
+        display: none;
+    }
+}

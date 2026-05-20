@@ -1,5 +1,7 @@
+import app/component
 import app/icon
 import gleam/int
+import gleam/list
 import gleam/pair
 import gleam/string
 import lustre
@@ -7,7 +9,6 @@ import lustre/attribute
 import lustre/effect
 import lustre/element
 import lustre/element/html
-import lustre/event
 
 pub fn main() -> Nil {
   let app = lustre.application(init:, update:, view:)
@@ -17,12 +18,21 @@ pub fn main() -> Nil {
 }
 
 type Model {
-  Model(start_time: Int, current_time: Int, started: Bool, paused: Bool)
+  Idle
+  Timer(
+    start_time: Int,
+    current_time: Int,
+    paused: Bool,
+    checkpoints: List(Checkpoint),
+  )
+}
+
+type Checkpoint {
+  Checkpoint(elapsed: Int)
 }
 
 fn init(_nil) -> #(Model, effect.Effect(Message)) {
-  Model(start_time: 0, current_time: 0, started: False, paused: False)
-  |> pair.new(effect.none())
+  #(Idle, effect.none())
 }
 
 @external(javascript, "./app.ffi.mjs", "now")
@@ -34,6 +44,7 @@ type Message {
   TimerStarted
   TimerPauseToggled
   TimerReset
+  CheckpointCaptured
   Ticked(date: Int)
 }
 
@@ -50,34 +61,49 @@ fn request_animation_frame(_callback: fn() -> a) -> Nil {
 }
 
 fn update(model: Model, message: Message) -> #(Model, effect.Effect(Message)) {
-  case message {
-    TimerStarted -> {
+  case model, message {
+    Idle, TimerStarted -> {
       let date = now()
-      Model(..model, start_time: date, current_time: date, started: True)
+      Timer(
+        start_time: date,
+        current_time: date,
+        paused: False,
+        checkpoints: [],
+      )
       |> pair.new(tick())
     }
-    TimerPauseToggled -> {
+    Timer(..), TimerStarted -> panic as "unreachable"
+
+    Timer(paused:, start_time:, current_time:, ..), TimerPauseToggled -> {
       let date = now()
-      case model.paused {
+      case paused {
         False ->
-          Model(..model, current_time: date, paused: True)
+          Timer(..model, current_time: date, paused: True)
           |> pair.new(effect.none())
 
         True -> {
-          let start_time = model.start_time + date - model.current_time
-          Model(..model, start_time:, current_time: date, paused: False)
+          let start_time = start_time + date - current_time
+          Timer(..model, start_time:, current_time: date, paused: False)
           |> pair.new(tick())
         }
       }
     }
-    TimerReset -> #(
-      Model(start_time: 0, current_time: 0, started: False, paused: False),
-      effect.none(),
-    )
+    Idle, TimerPauseToggled -> panic as "unreachable"
 
-    Ticked(date) if model.started && !model.paused ->
-      Model(..model, current_time: date) |> pair.new(tick())
-    Ticked(_date) -> #(model, effect.none())
+    Timer(..), TimerReset -> #(Idle, effect.none())
+    Idle, TimerReset -> panic as "unreachable"
+
+    Timer(start_time:, current_time:, checkpoints:, ..), CheckpointCaptured -> {
+      let elapsed = current_time - start_time
+
+      Timer(..model, checkpoints: [Checkpoint(elapsed:), ..checkpoints])
+      |> pair.new(effect.none())
+    }
+    Idle, CheckpointCaptured -> panic as "unreachable"
+
+    Timer(paused: False, ..), Ticked(date) ->
+      Timer(..model, current_time: date) |> pair.new(tick())
+    Timer(..), Ticked(..) | Idle, Ticked(..) -> #(model, effect.none())
   }
 }
 
@@ -85,83 +111,123 @@ fn view(model: Model) -> element.Element(Message) {
   html.main(
     [
       attribute.class(
-        "min-h-dvh flex font-bold items-center justify-center px-3 select-none",
+        "min-h-dvh flex flex-col font-bold items-center justify-start pt-[30vh] px-3 select-none",
       ),
     ],
-    [html.div([attribute.class("w-full flex flex-col")], view_timer(model))],
+    [
+      html.div(
+        [attribute.class("w-full max-w-xs flex flex-col")],
+        view_timer(model),
+      ),
+    ],
   )
 }
 
 fn view_timer(model: Model) {
-  let elapsed = model.current_time - model.start_time
-  let timer = parse_milliseconds(elapsed)
+  let #(elapsed, children) = case model {
+    Idle -> #(
+      0,
+      component.button(on_click: TimerStarted, class: "mt-3", children: [
+        icon.play("text-stone-950 size-7 mx-auto"),
+      ]),
+    )
+    Timer(start_time:, current_time:, paused:, checkpoints:) -> {
+      let elapsed = current_time - start_time
+      let total_checkpoints = list.length(checkpoints)
+      let checkpoints =
+        list.index_map(checkpoints, fn(checkpoint, index) {
+          let index = total_checkpoints - index
+          view_checkpoint(index, checkpoint)
+        })
 
-  [
-    html.p([attribute.class("text-3xl text-center")], [
-      element.text(timer.hours),
-      element.text(":"),
-      element.text(timer.minutes),
-      element.text(":"),
-      element.text(timer.seconds),
-      element.text(":"),
-      element.text(timer.milliseconds),
-    ]),
-
-    case model.started {
-      False ->
-        html.button(
-          [
-            attribute.class("bg-stone-50 cursor-pointer w-full rounded-sm mt-3"),
-            event.on_click(TimerStarted),
-          ],
-          [
-            icon.play("text-stone-950 size-7 mx-auto"),
-          ],
-        )
-      True ->
-        html.div([attribute.class("mt-3 flex gap-1")], [
-          html.button(
-            [
-              attribute.class("bg-stone-50 cursor-pointer w-full rounded-sm"),
-              event.on_click(TimerPauseToggled),
-            ],
-            [
-              case model.paused {
+      #(
+        elapsed,
+        element.fragment([
+          html.div([attribute.class("mt-3 flex gap-1")], [
+            component.button(on_click: TimerPauseToggled, class: "", children: [
+              case paused {
                 True -> icon.play("text-stone-950 size-7 mx-auto")
                 False -> icon.stop("text-stone-950 size-7 mx-auto")
               },
+            ]),
+            component.button(on_click: TimerReset, class: "py-1", children: [
+              icon.reset("text-stone-950 size-5 mx-auto"),
+            ]),
+          ]),
+          component.button(
+            on_click: CheckpointCaptured,
+            class: "py-1 mt-1",
+            children: [
+              icon.checkpoint("text-stone-950 size-5 mx-auto"),
             ],
           ),
-          html.button(
+          html.ul(
             [
               attribute.class(
-                "bg-stone-50 cursor-pointer w-full py-1 rounded-sm",
+                "mt-4 max-h-48 overflow-y-auto scroll-smooth custom-scrollbar flex flex-col gap-1 pr-1",
               ),
-              event.on_click(TimerReset),
             ],
-            [
-              icon.reset("text-stone-950 size-5 mx-auto"),
-            ],
+            checkpoints,
           ),
-        ])
-    },
+        ]),
+      )
+    }
+  }
+
+  [
+    html.p([attribute.class("text-3xl text-center")], [
+      element.text(time_to_string(parse_milliseconds(elapsed))),
+    ]),
+    children,
   ]
 }
 
-type Timer {
-  Timer(milliseconds: String, seconds: String, minutes: String, hours: String)
+fn view_checkpoint(
+  index: Int,
+  checkpoint: Checkpoint,
+) -> element.Element(Message) {
+  html.li(
+    [
+      attribute.class(
+        "flex justify-between items-center py-2 px-1 border-b border-stone-800 text-stone-400 font-mono text-sm",
+      ),
+    ],
+    [
+      html.span([attribute.class("text-stone-500")], [
+        element.text("#"),
+        element.text(int.to_string(index) |> string.pad_start(to: 2, with: "0")),
+      ]),
+      html.span([], [
+        element.text(time_to_string(parse_milliseconds(checkpoint.elapsed))),
+      ]),
+    ],
+  )
 }
 
-fn parse_milliseconds(milliseconds: Int) {
+type Time {
+  Time(milliseconds: String, seconds: String, minutes: String, hours: String)
+}
+
+fn parse_milliseconds(milliseconds: Int) -> Time {
   let seconds = milliseconds / 1000
   let minutes = seconds / 60
   let hours = minutes / 60
 
-  Timer(
+  Time(
     milliseconds: int.to_string(milliseconds % 1000)
       |> string.pad_start(to: 3, with: "0"),
     seconds: int.to_string(seconds % 60) |> string.pad_start(to: 2, with: "0"),
     minutes: int.to_string(minutes % 60) |> string.pad_start(to: 2, with: "0"),
     hours: int.to_string(hours) |> string.pad_start(to: 2, with: "0"),
   )
+}
+
+fn time_to_string(time: Time) -> String {
+  time.hours
+  <> ":"
+  <> time.minutes
+  <> ":"
+  <> time.seconds
+  <> ":"
+  <> time.milliseconds
 }
