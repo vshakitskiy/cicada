@@ -33,7 +33,7 @@ type Checkpoint {
   Checkpoint(elapsed: Int, title: String)
 }
 
-fn init(_nil) -> #(Model, effect.Effect(Message)) {
+fn init(_nil: a) -> #(Model, effect.Effect(Message)) {
   #(Idle, effect.none())
 }
 
@@ -78,6 +78,7 @@ fn update(model: Model, message: Message) -> #(Model, effect.Effect(Message)) {
     Timer(..), TimerStarted -> panic as "unreachable"
 
     Timer(paused:, start_time:, current_time:, ..), TimerPauseToggled -> {
+      echo TimerPauseToggled
       let date = now()
       case paused {
         False ->
@@ -97,6 +98,7 @@ fn update(model: Model, message: Message) -> #(Model, effect.Effect(Message)) {
     Idle, TimerReset -> panic as "unreachable"
 
     Timer(start_time:, current_time:, checkpoints:, ..), CheckpointCaptured -> {
+      echo CheckpointCaptured
       let elapsed = current_time - start_time
       let next_id = list.length(checkpoints) + 1
 
@@ -137,23 +139,26 @@ fn view(model: Model) -> element.Element(Message) {
     ],
     [
       html.div(
-        [attribute.class("w-full max-w-xs flex flex-col")],
+        [
+          attribute.class(
+            "w-full max-w-xs xs:max-w-md md:max-w-xl lg:max-w-3xl xl:max-w-4xl 2xl:max-w-5xl flex flex-col",
+          ),
+        ],
         view_timer(model),
       ),
     ],
   )
 }
 
-fn view_timer(model: Model) {
-  let #(elapsed, children) = case model {
-    Idle -> #(
-      0,
+fn view_timer(model: Model) -> List(element.Element(Message)) {
+  case model {
+    Idle -> [
+      view_time(0),
       component.button(on_click: TimerStarted, class: "mt-3", children: [
-        icon.play("text-stone-950 size-7 mx-auto"),
+        icon.play("text-stone-950 size-7 mx-auto xs:size-10 2xl:size-12"),
       ]),
-    )
+    ]
     Timer(start_time:, current_time:, paused:, checkpoints:) -> {
-      let elapsed = current_time - start_time
       let total_checkpoints = list.length(checkpoints)
       let checkpoints =
         list.index_map(checkpoints, fn(checkpoint, index) {
@@ -163,47 +168,63 @@ fn view_timer(model: Model) {
           )
         })
 
-      #(
-        elapsed,
-        element.fragment([
-          html.div([attribute.class("mt-3 flex gap-1")], [
-            component.button(on_click: TimerPauseToggled, class: "", children: [
-              case paused {
-                True -> icon.play("text-stone-950 size-7 mx-auto")
-                False -> icon.stop("text-stone-950 size-7 mx-auto")
-              },
-            ]),
-            component.button(on_click: TimerReset, class: "py-1", children: [
-              icon.reset("text-stone-950 size-5 mx-auto"),
-            ]),
+      [
+        view_time(current_time - start_time),
+        html.div([attribute.class("mt-3 flex gap-1 xs:gap-2")], [
+          component.button(on_click: TimerPauseToggled, class: "", children: [
+            case paused {
+              True ->
+                icon.play(
+                  "text-stone-950 size-7 xs:size-10 2xl:size-12 mx-auto",
+                )
+              False ->
+                icon.stop(
+                  "text-stone-950 size-7 xs:size-10 2xl:size-12 mx-auto",
+                )
+            },
           ]),
           component.button(
-            on_click: CheckpointCaptured,
-            class: "py-1 mt-1",
+            on_click: TimerReset,
+            class: "py-1 xs:py-2",
             children: [
-              icon.checkpoint("text-stone-950 size-5 mx-auto"),
+              icon.reset("text-stone-950 xs:size-6 2xl:size-8 size-5 mx-auto"),
             ],
-          ),
-          html.hr([attribute.class("mt-2 w-full border-stone-500")]),
-          keyed.ul(
-            [
-              attribute.class(
-                "mt-2 max-h-48 overflow-y-auto scroll-smooth custom-scrollbar flex flex-col gap-1 pr-1",
-              ),
-            ],
-            checkpoints,
           ),
         ]),
-      )
+        component.button(
+          on_click: CheckpointCaptured,
+          class: "py-1 xs:py-2 mt-1 xs:mt-2",
+          children: [
+            icon.checkpoint(
+              "text-stone-950 xs:size-6 2xl:size-8 size-5 mx-auto",
+            ),
+          ],
+        ),
+        html.hr([attribute.class("mt-2 w-full border-stone-500")]),
+        keyed.ul(
+          [
+            attribute.class(
+              "mt-2 max-h-48 overflow-y-auto scroll-smooth custom-scrollbar flex flex-col gap-1 pr-1",
+            ),
+          ],
+          checkpoints,
+        ),
+      ]
     }
   }
+}
 
-  [
-    html.p([attribute.class("text-3xl text-center select-none")], [
+fn view_time(elapsed: Int) -> element.Element(Message) {
+  html.p(
+    [
+      attribute.class(
+        "text-3xl xs:text-5xl md:text-6xl lg:text-7xl xl:text-8xl 2xl:text-9xl text-center select-none",
+      ),
+    ],
+    [
       element.text(time_to_string(parse_milliseconds(elapsed))),
-    ]),
-    children,
-  ]
+    ],
+  )
 }
 
 fn view_checkpoint(
@@ -214,7 +235,7 @@ fn view_checkpoint(
   html.li(
     [
       attribute.class(
-        "flex justify-between w-full items-center py-2 px-1 border-b last:border-none gap-2 border-stone-800 text-stone-400 font-mono text-xs",
+        "flex justify-between w-full items-center py-2 px-1 border-b last:border-none gap-2 border-stone-800 text-stone-400 font-mono text-xs xs:text-base lg:text-lg 2xl:text-xl xs:py-3 xs:gap-3 lg:gap-4 2xl:gap-5",
       ),
     ],
     [
@@ -231,7 +252,7 @@ fn view_checkpoint(
         html.div(
           [
             attribute.class(
-              "col-start-1 row-start-1 w-full whitespace-pre-wrap break-all invisible text-stone-100 font-bold px-1 py-0.5 leading-relaxed min-h-[1.5em]",
+              "col-start-1 row-start-1 w-full whitespace-pre-wrap break-all invisible px-1 py-0.5 leading-relaxed min-h-[1.5em]",
             ),
           ],
           [element.text(checkpoint.title <> " ")],
@@ -240,7 +261,7 @@ fn view_checkpoint(
           [
             attribute.value(checkpoint.title),
             attribute.rows(1),
-            attribute.maxlength(50),
+            attribute.maxlength(100),
             attribute.class(
               "col-start-1 row-start-1 h-full w-full bg-transparent break-all text-stone-100 font-bold focus:outline-none focus:bg-stone-900/50 rounded-sm text-left transition-colors resize-none overflow-hidden leading-relaxed px-1 py-0.5",
             ),

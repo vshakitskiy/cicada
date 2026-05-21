@@ -9,6 +9,7 @@
 }
 
 @theme {
+    --breakpoint-xs: 30rem;
     --font-space-mono: SpaceMono, monospace;
 }
 
