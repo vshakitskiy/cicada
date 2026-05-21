@@ -3,7 +3,7 @@ name: formatting
 on:
   push:
     branches:
-      - misrress
+      - mistress
   pull_request:
 
 jobs:
