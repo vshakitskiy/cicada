@@ -17,6 +17,7 @@ minify = true
 host = "0.0.0.0"
 
 [tools.lustre.html]
+title = "cicada"
 links = [
     { rel = "preload", href = "/SpaceMono-Regular.woff2", as = "font", type = "font/woff2", crossorigin = true },
 ]
