@@ -1,6 +1,8 @@
 import app/component
 import app/icon
+import gleam/dynamic/decode
 import gleam/int
+import gleam/json
 import gleam/list
 import gleam/pair
 import gleam/string
@@ -29,12 +31,101 @@ type Model {
   )
 }
 
+type Store {
+  Store(elapsed: Int, paused: Bool, checkpoints: List(Checkpoint))
+}
+
+fn store_to_json(store: Store) -> json.Json {
+  let Store(elapsed:, paused:, checkpoints:) = store
+  json.object([
+    #("elapsed", json.int(elapsed)),
+    #("paused", json.bool(paused)),
+    #("checkpoints", json.array(checkpoints, checkpoint_to_json)),
+  ])
+}
+
+fn store_decoder() -> decode.Decoder(Store) {
+  use elapsed <- decode.field("elapsed", decode.int)
+  use paused <- decode.field("paused", decode.bool)
+  use checkpoints <- decode.field(
+    "checkpoints",
+    decode.list(checkpoint_decoder()),
+  )
+
+  decode.success(Store(elapsed:, paused:, checkpoints:))
+}
+
+fn persist(model: Model) -> Model {
+  case model {
+    Idle -> remove_item("store")
+    Timer(start_time:, current_time:, paused:, checkpoints:) ->
+      Store(elapsed: current_time - start_time, paused:, checkpoints:)
+      |> store_to_json
+      |> json.to_string
+      |> set_item("store", _)
+  }
+
+  model
+}
+
+@external(javascript, "./app.ffi.mjs", "set_item")
+fn set_item(_key: String, _value: String) -> Nil {
+  Nil
+}
+
+@external(javascript, "./app.ffi.mjs", "get_item")
+fn get_item(_key: String) -> Result(String, Nil) {
+  Error(Nil)
+}
+
+@external(javascript, "./app.ffi.mjs", "remove_item")
+fn remove_item(_key: String) -> Nil {
+  Nil
+}
+
 type Checkpoint {
   Checkpoint(elapsed: Int, title: String)
 }
 
+fn checkpoint_to_json(checkpoint: Checkpoint) -> json.Json {
+  let Checkpoint(elapsed:, title:) = checkpoint
+  json.object([
+    #("elapsed", json.int(elapsed)),
+    #("title", json.string(title)),
+  ])
+}
+
+fn checkpoint_decoder() -> decode.Decoder(Checkpoint) {
+  use elapsed <- decode.field("elapsed", decode.int)
+  use title <- decode.field("title", decode.string)
+  decode.success(Checkpoint(elapsed:, title:))
+}
+
 fn init(_nil: a) -> #(Model, effect.Effect(Message)) {
-  #(Idle, effect.none())
+  case get_item("store") {
+    Ok(state) -> {
+      case json.parse(from: state, using: store_decoder()) {
+        Ok(Store(elapsed:, paused:, checkpoints:)) -> {
+          let date = now()
+
+          let model =
+            Timer(
+              start_time: date - elapsed,
+              current_time: date,
+              paused:,
+              checkpoints:,
+            )
+
+          case paused {
+            True -> #(model, effect.none())
+            False -> #(model, tick())
+          }
+        }
+        Error(_decode_error) -> #(Idle, effect.none())
+      }
+    }
+    Error(Nil) -> #(Idle, effect.none())
+  }
 }
 
 @external(javascript, "./app.ffi.mjs", "now")
@@ -67,38 +158,42 @@ fn update(model: Model, message: Message) -> #(Model, effect.Effect(Message)) {
   case model, message {
     Idle, TimerStarted -> {
       let date = now()
+
       Timer(
         start_time: date,
         current_time: date,
         paused: False,
         checkpoints: [],
       )
+      |> persist
       |> pair.new(tick())
     }
     Timer(..), TimerStarted -> panic as "unreachable"
 
     Timer(paused:, start_time:, current_time:, ..), TimerPauseToggled -> {
-      echo TimerPauseToggled
       let date = now()
+
       case paused {
         False ->
           Timer(..model, current_time: date, paused: True)
+          |> persist
           |> pair.new(effect.none())
 
         True -> {
           let start_time = start_time + date - current_time
+
           Timer(..model, start_time:, current_time: date, paused: False)
+          |> persist
           |> pair.new(tick())
         }
       }
     }
     Idle, TimerPauseToggled -> panic as "unreachable"
 
-    Timer(..), TimerReset -> #(Idle, effect.none())
+    Timer(..), TimerReset -> #(persist(Idle), effect.none())
     Idle, TimerReset -> panic as "unreachable"
 
     Timer(start_time:, current_time:, checkpoints:, ..), CheckpointCaptured -> {
-      echo CheckpointCaptured
       let elapsed = current_time - start_time
       let next_id = list.length(checkpoints) + 1
 
@@ -107,6 +202,7 @@ fn update(model: Model, message: Message) -> #(Model, effect.Effect(Message)) {
         <> { int.to_string(next_id) |> string.pad_start(to: 2, with: "0") }
 
       Timer(..model, checkpoints: [Checkpoint(elapsed:, title:), ..checkpoints])
+      |> persist
       |> pair.new(effect.none())
     }
     Idle, CheckpointCaptured -> panic as "unreachable"
@@ -120,13 +216,16 @@ fn update(model: Model, message: Message) -> #(Model, effect.Effect(Message)) {
           }
         })
 
-      #(Timer(..model, checkpoints:), effect.none())
+      Timer(..model, checkpoints:)
+      |> persist
+      |> pair.new(effect.none())
     }
     Idle, CheckpointTitleUpdated(..) -> panic as "unreachable"
 
     Timer(paused: False, ..), Ticked(date) ->
-      Timer(..model, current_time: date) |> pair.new(tick())
-    Timer(..), Ticked(..) | Idle, Ticked(..) -> #(model, effect.none())
+      Timer(..model, current_time: date) |> persist |> pair.new(tick())
+    Timer(paused: True, ..), Ticked(..) -> #(model, effect.none())
+    Idle, Ticked(..) -> panic as "unreachable"
   }
 }
 
@@ -246,9 +345,13 @@ fn view_checkpoint(
         ),
       ]),
 
-      // smoll invisible mirror trick for textarea resize for all browser 
-      // engines
-      html.div([attribute.class("grid grow relative")], [
+      // this is a cursed small trick for auto-grow for textarea with CSS only
+      //
+      // There is also field-sizing property:
+      // https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/field-sizing
+      // Buuuut for the time of documenting, it is not supported on firefox yet;
+      // In development, Firefox 152 with the release date of 2026-06-16
+      html.div([attribute.class("grid grow")], [
         html.div(
           [
             attribute.class(
@@ -263,7 +366,7 @@ fn view_checkpoint(
             attribute.rows(1),
             attribute.maxlength(100),
             attribute.class(
-              "col-start-1 row-start-1 h-full w-full bg-transparent break-all text-stone-100 font-bold focus:outline-none focus:bg-stone-900/50 rounded-sm text-left transition-colors resize-none overflow-hidden leading-relaxed px-1 py-0.5",
+              "col-start-1 row-start-1 h-full w-full bg-transparent break-all text-stone-100 font-bold focus:outline-none focus:bg-stone-900/50 rounded-sm transition-colors resize-none overflow-hidden leading-relaxed px-1 py-0.5",
             ),
             event.on_input(CheckpointTitleUpdated(index, _)),
           ],
